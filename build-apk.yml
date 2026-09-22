@@ -1,0 +1,229 @@
+name: PC-Kontrolle APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Android-Projekt automatisch erstellen
+        shell: bash
+        run: |
+          set -e
+          mkdir -p app/src/main/java/com/spectrumx/pckontrolle app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "PC-Kontrolle"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.9.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.1.20" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.spectrumx.pckontrolle"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.spectrumx.pckontrolle"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.16.0")
+              implementation("androidx.activity:activity-compose:1.10.1")
+              implementation(platform("androidx.compose:compose-bom:2025.04.01"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.compose.material3:material3")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+          }
+          EOF
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+                  <item name="android:statusBarColor">#07040D</item>
+                  <item name="android:navigationBarColor">#07040D</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application android:theme="@style/AppTheme" android:label="PC Kontrolle">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/spectrumx/pckontrolle/MainActivity.kt <<'EOF'
+          package com.spectrumx.pckontrolle
+
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.unit.dp
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import java.net.HttpURLConnection
+          import java.net.URL
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent { PcControl() }
+              }
+          }
+
+          @Composable
+          fun PcControl() {
+              val scope = rememberCoroutineScope()
+              var address by remember { mutableStateOf("http://192.168.178.100:8765") }
+              var status by remember { mutableStateOf("Nicht verbunden") }
+
+              fun send(path: String) {
+                  scope.launch(Dispatchers.IO) {
+                      val result = try {
+                          val c = URL(address.trimEnd('/') + path)
+                              .openConnection() as HttpURLConnection
+                          c.requestMethod = "POST"
+                          c.connectTimeout = 2500
+                          c.readTimeout = 2500
+                          val code = c.responseCode
+                          c.disconnect()
+                          if (code in 200..299) "Befehl ausgeführt" else "Fehler HTTP $code"
+                      } catch (_: Exception) {
+                          "PC nicht erreichbar"
+                      }
+                      launch(Dispatchers.Main) { status = result }
+                  }
+              }
+
+              MaterialTheme(
+                  colorScheme = darkColorScheme(
+                      primary = Color(0xFFB56CFF),
+                      background = Color(0xFF07040D),
+                      surface = Color(0xFF110B1B)
+                  )
+              ) {
+                  Surface(Modifier.fillMaxSize()) {
+                      Column(Modifier.fillMaxSize().padding(18.dp)) {
+                          Text("PC KONTROLLE", style = MaterialTheme.typography.headlineMedium)
+                          Text("Handy → Windows-PC")
+                          Spacer(Modifier.height(18.dp))
+
+                          OutlinedTextField(
+                              value = address,
+                              onValueChange = { address = it },
+                              label = { Text("PC-Adresse") },
+                              singleLine = true,
+                              modifier = Modifier.fillMaxWidth()
+                          )
+
+                          Spacer(Modifier.height(8.dp))
+                          Text(status)
+                          Spacer(Modifier.height(16.dp))
+
+                          Row(Modifier.fillMaxWidth()) {
+                              Button({ send("/api/power/lock") }, Modifier.weight(1f)) {
+                                  Text("Sperren")
+                              }
+                              Spacer(Modifier.width(8.dp))
+                              Button({ send("/api/power/restart") }, Modifier.weight(1f)) {
+                                  Text("Neustart")
+                              }
+                          }
+
+                          Spacer(Modifier.height(8.dp))
+
+                          Row(Modifier.fillMaxWidth()) {
+                              Button({ send("/api/power/sleep") }, Modifier.weight(1f)) {
+                                  Text("Schlafen")
+                              }
+                              Spacer(Modifier.width(8.dp))
+                              Button({ send("/api/power/shutdown") }, Modifier.weight(1f)) {
+                                  Text("Ausschalten")
+                              }
+                          }
+
+                          Spacer(Modifier.height(8.dp))
+
+                          Row(Modifier.fillMaxWidth()) {
+                              Button({ send("/api/media/volume/up") }, Modifier.weight(1f)) {
+                                  Text("Lauter")
+                              }
+                              Spacer(Modifier.width(8.dp))
+                              Button({ send("/api/media/volume/down") }, Modifier.weight(1f)) {
+                                  Text("Leiser")
+                              }
+                              Spacer(Modifier.width(8.dp))
+                              Button({ send("/api/media/playpause") }, Modifier.weight(1f)) {
+                                  Text("Play")
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
+      - name: Android SDK einrichten
+        uses: android-actions/setup-android@v3
+
+      - name: SDK installieren
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Gradle laden
+        run: |
+          curl -L -o gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          unzip -q gradle.zip
+
+      - name: APK bauen
+        run: ./gradle-8.9/bin/gradle :app:assembleDebug --no-daemon
+
+      - name: APK bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: PC-Kontrolle-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
